@@ -4,7 +4,7 @@ import matplotlib.pyplot as plt
 import seaborn as sns
 
 st.set_page_config(page_title="EDA Interface", layout="wide")
-st.title("📊 Exploratory Data Analysis Interface")
+st.title(" Exploratory Data Analysis Interface")
 
 st.sidebar.header("Controls")
 uploaded_file = st.sidebar.file_uploader("Upload CSV Dataset", type=["csv"])
