@@ -1,81 +1,155 @@
-import streamlit as st
-import pandas as pd
+import heapq
+import math
 import matplotlib.pyplot as plt
-import seaborn as sns
+import networkx as nx
+import streamlit as st
 
-st.set_page_config(page_title="EDA Interface", layout="wide")
-st.title(" Exploratory Data Analysis Interface")
+# 1. Define Common Graph Data
+locations = {
+    "Pharmacy": (0, 0),
+    "Corridor_A": (1, 4),
+    "Corridor_B": (2, 1),
+    "ICU": (5, 5),
+    "Triage": (4, 2),
+    "Radiology": (7, 4),
+    "Emergency_Ward": (8, 6),
+}
 
-st.sidebar.header("Controls")
-uploaded_file = st.sidebar.file_uploader("Upload CSV Dataset", type=["csv"])
+edges = [
+    ("Pharmacy", "Corridor_A", 4.12),
+    ("Pharmacy", "Corridor_B", 2.24),
+    ("Corridor_A", "ICU", 5.00),
+    ("Corridor_B", "Triage", 2.24),
+    ("ICU", "Emergency_Ward", 3.16),
+    ("Triage", "Radiology", 3.16),
+    ("Radiology", "Emergency_Ward", 2.24),
+]
 
-if uploaded_file is not None:
-    try:
-        df = pd.read_csv(uploaded_file)
-        selected_column = st.sidebar.selectbox("Select Column for Analysis", options=df.columns)
+G = nx.Graph()
+for node, pos in locations.items():
+    G.add_node(node, pos=pos)
+for u, v, w in edges:
+    G.add_edge(u, v, weight=w)
 
-        st.header("1. Dataset Overview & Preview")
-        st.subheader("Data Preview (First 5 Rows)")
-        st.dataframe(df.head(5), use_container_width=True)
 
-        st.subheader("Metadata Summary")
-        col1, col2 = st.columns(2)
-        col1.metric("Total Rows", df.shape[0])
-        col2.metric("Total Columns", df.shape[1])
+def heuristic(n1, n2):
+    x1, y1 = locations[n1]
+    x2, y2 = locations[n2]
+    return math.sqrt((x2 - x1) ** 2 + (y2 - y1) ** 2)
 
-        meta_df = pd.DataFrame({
-            "Data Type": df.dtypes.astype(str),
-            "Missing Values Count": df.isnull().sum(),
-            "Missing Values (%)": (df.isnull().sum() / len(df) * 100).round(2)
-        })
-        st.dataframe(meta_df, use_container_width=True)
 
-        st.subheader("Numerical Statistical Summary")
-        num_cols = df.select_dtypes(include=["number"]).columns
-        if len(num_cols) > 0:
-            stats_df = df[num_cols].describe().T[["mean", "50%", "min", "max"]]
-            stats_df.rename(columns={"50%": "median"}, inplace=True)
-            st.dataframe(stats_df, use_container_width=True)
+# 2. Search Algorithms
+def run_gbfs(graph, start, goal):
+    pq = [(heuristic(start, goal), start)]
+    came_from = {start: None}
+    visited = set()
+    while pq:
+        _, current = heapq.heappop(pq)
+        if current in visited:
+            continue
+        visited.add(current)
+        if current == goal:
+            break
+        for nxt in graph.neighbors(current):
+            if nxt not in visited:
+                if nxt not in came_from:
+                    came_from[nxt] = current
+                heapq.heappush(pq, (heuristic(nxt, goal), nxt))
+
+    path = []
+    curr = goal
+    while curr is not None:
+        path.append(curr)
+        curr = came_from.get(curr)
+    path.reverse()
+
+    cost = sum(
+        graph[path[i]][path[i + 1]]["weight"] for i in range(len(path) - 1)
+    )
+    return path, round(cost, 2)
+
+
+def run_astar(graph, start, goal):
+    pq = [(heuristic(start, goal), start)]
+    g_score = {node: float("inf") for node in graph.nodes()}
+    g_score[start] = 0
+    came_from = {start: None}
+    visited = set()
+
+    while pq:
+        _, current = heapq.heappop(pq)
+        if current in visited:
+            continue
+        visited.add(current)
+        if current == goal:
+            break
+        for nxt in graph.neighbors(current):
+            tentative_g = g_score[current] + graph[current][nxt]["weight"]
+            if tentative_g < g_score[nxt]:
+                came_from[nxt] = current
+                g_score[nxt] = tentative_g
+                f_score = tentative_g + heuristic(nxt, goal)
+                heapq.heappush(pq, (f_score, nxt))
+
+    path = []
+    curr = goal
+    while curr is not None:
+        path.append(curr)
+        curr = came_from.get(curr)
+    path.reverse()
+    return path, round(g_score[goal], 2)
+
+
+# 3. Streamlit Interface
+st.title("AI Informed Search Algorithm Visualizer")
+st.sidebar.header("Search Configurations")
+
+nodes_list = list(locations.keys())
+start_node = st.sidebar.selectbox("Select Start Node", nodes_list, index=0)
+goal_node = st.sidebar.selectbox(
+    "Select Goal Node", nodes_list, index=len(nodes_list) - 1
+)
+algo_choice = st.sidebar.selectbox(
+    "Select Search Algorithm", ["Greedy Best-First Search (GBFS)", "A* Search"]
+)
+
+if st.sidebar.button("Run Search"):
+    if start_node == goal_node:
+        st.warning("Start and Goal nodes must be different!")
+    else:
+        if algo_choice == "Greedy Best-First Search (GBFS)":
+            path, cost = run_gbfs(G, start_node, goal_node)
         else:
-            st.info("No numerical attributes detected.")
+            path, cost = run_astar(G, start_node, goal_node)
 
-        st.divider()
+        # Plot Network Graph
+        fig, ax = plt.subplots(figsize=(8, 5))
+        pos = nx.get_node_attributes(G, "pos")
+        path_edges = list(zip(path[:-1], path[1:]))
 
-        st.header(f"2. Visual Analysis: `{selected_column}`")
-        col_data = df[selected_column]
-        is_numeric = pd.api.types.is_numeric_dtype(col_data) and col_data.nunique() > 10
+        nx.draw_networkx_nodes(
+            G, pos, ax=ax, node_size=600, node_color="lightblue"
+        )
+        nx.draw_networkx_nodes(
+            G, pos, nodelist=path, ax=ax, node_size=700, node_color="coral"
+        )
+        nx.draw_networkx_edges(G, pos, ax=ax, width=1.5, edge_color="gray")
+        nx.draw_networkx_edges(
+            G, pos, edgelist=path_edges, ax=ax, width=3, edge_color="red"
+        )
+        nx.draw_networkx_labels(
+            G, pos, ax=ax, font_size=9, font_weight="bold"
+        )
 
-        fig, ax = plt.subplots(figsize=(8, 4))
-        sns.set_theme(style="whitegrid")
+        edge_labels = nx.get_edge_attributes(G, "weight")
+        nx.draw_networkx_edge_labels(G, pos, edge_labels=edge_labels, ax=ax)
 
-        if is_numeric:
-            st.markdown("**Detected Type:** `Numerical`")
-            sns.histplot(col_data.dropna(), kde=True, ax=ax, color="steelblue")
-            ax.set_title(f"Histogram of {selected_column}")
-            ax.set_xlabel(selected_column)
-            ax.set_ylabel("Frequency")
-        else:
-            st.markdown("**Detected Type:** `Categorical`")
-            order = col_data.value_counts(dropna=False).index
-            sns.countplot(data=df, x=selected_column, order=order, ax=ax, palette="viridis")
-            ax.set_title(f"Frequency Count of {selected_column}")
-            ax.set_xlabel(selected_column)
-            ax.set_ylabel("Count")
-
-            total = len(df)
-            for p in ax.patches:
-                height = p.get_height()
-                if height > 0:
-                    percentage = f"{100 * height / total:.1f}%"
-                    ax.annotate(percentage, (p.get_x() + p.get_width() / 2., height),
-                                ha='center', va='bottom', fontsize=9, xytext=(0, 3),
-                                textcoords='offset points')
-
-        plt.tight_layout()
+        plt.title(f" Path Visualizer: {algo_choice}")
+        plt.axis("off")
         st.pyplot(fig)
 
-    except Exception as e:
-        st.error(f"Error parsing file: {e}")
-
-else:
-    st.info("Please upload a CSV file via the sidebar to start.")
+        # Deliverables Output Section
+        st.subheader("Execution Results")
+        st.write(f"**Selected Algorithm:** {algo_choice}")
+        st.write(f"**Solution Path:** {' ➔ '.join(path)}")
+        st.write(f"**Total Path Cost:** {cost} units")
